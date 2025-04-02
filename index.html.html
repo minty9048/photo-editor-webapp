@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Photo Editor with Live Preview</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.10.377/pdf.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .container { max-width: 800px; margin: auto; }
+        input, select, button { margin: 10px 0; }
+        label { display: inline-block; width: 150px; }
+        #previewContainer { margin-top: 20px; }
+        #imagePreview { max-width: 100%; display: none; border: 2px solid green; }
+        #pdfPreview { width: 100%; height: 400px; display: none; border: 2px solid blue; }
+        #status { color: red; }
+        .button-group { display: flex; gap: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Photo Editor with Live Preview</h2>
+        <input type="file" id="imageInput" accept=".jpg,.jpeg" /><br>
+        <label>Target File Size:</label>
+        <select id="sizeSelect">
+            <option value="200">~200 KB</option>
+            <option value="300">~300 KB</option>
+            <option value="500">~500 KB</option>
+            <option value="custom">Custom</option>
+        </select>
+        <input type="number" id="customSize" min="1" placeholder="Enter KB" style="display: none;" /><br>
+        <label>Keep Aspect Ratio:</label>
+        <input type="checkbox" id="aspectRatio" checked /><br>
+        <label>JPEG Quality (1-100):</label>
+        <input type="range" id="qualitySlider" min="10" max="100" value="90" />
+        <span id="qualityValue">90</span><br>
+        <label>Output Format:</label>
+        <input type="radio" id="jpgOutput" name="outputFormat" value="jpg" checked> JPG
+        <input type="radio" id="pdfOutput" name="outputFormat" value="pdf"> PDF<br>
+        <label>Rotation (degrees):</label>
+        <input type="number" id="rotation" min="0" max="360" value="0" step="90" /><br>
+        <div class="button-group">
+            <button id="downloadButton" disabled onclick="downloadResult()">Download</button>
+            <button onclick="resetForm()">Reset</button>
+        </div>
+        <div id="previewContainer">
+            <h3>Live Preview</h3>
+            <div id="status"></div>
+            <img id="imagePreview" alt="JPG Preview" />
+            <canvas id="pdfPreview"></canvas>
+        </div>
+        <canvas id="canvas" style="display: none;"></canvas>
+    </div>
+
+    <script>
+        const { jsPDF } = window.jspdf;
+        let currentImage = null;
+        let downloadData = { url: null, filename: null };
+
+        // Event listeners
+        document.getElementById('imageInput').addEventListener('change', loadImage);
+        document.getElementById('sizeSelect').addEventListener('change', updatePreview);
+        document.getElementById('customSize').addEventListener('input', updatePreview);
+        document.getElementById('aspectRatio').addEventListener('change', updatePreview);
+        document.getElementById('qualitySlider').addEventListener('input', function() {
+            document.getElementById('qualityValue').textContent = this.value;
+            updatePreview();
+        });
+        document.querySelectorAll('input[name="outputFormat"]').forEach(radio => 
+            radio.addEventListener('change', updatePreview)
+        );
+        document.getElementById('rotation').addEventListener('input', updatePreview);
+
+        // Show/hide custom size input
+        document.getElementById('sizeSelect').addEventListener('change', function() {
+            document.getElementById('customSize').style.display = this.value === 'custom' ? 'inline' : 'none';
+        });
+
+        function loadImage() {
+            const fileInput = document.getElementById('imageInput');
+            const status = document.getElementById('status');
+            status.textContent = 'Loading image...';
+            if (fileInput.files[0]) {
+                currentImage = new Image();
+                currentImage.onload = function() {
+                    status.textContent = 'Image loaded, updating preview...';
+                    updatePreview();
+                };
+                currentImage.onerror = function() {
+                    status.textContent = 'Error loading image.';
+                };
+                currentImage.src = URL.createObjectURL(fileInput.files[0]);
+            } else {
+                status.textContent = 'No image selected.';
+            }
+        }
+
+        function updatePreview() {
+            const status = document.getElementById('status');
+            const downloadButton = document.getElementById('downloadButton');
+            if (!currentImage) {
+                status.textContent = 'Please upload an image first.';
+                downloadButton.disabled = true;
+                return;
+            }
+
+            const sizeSelect = document.getElementById('sizeSelect');
+            const customSize = document.getElementById('customSize');
+            const aspectRatio = document.getElementById('aspectRatio').checked;
+            const quality = document.getElementById('qualitySlider').value / 100;
+            const outputFormat = document.querySelector('input[name="outputFormat"]:checked').value;
+            const rotation = parseInt(document.getElementById('rotation').value) || 0;
+            const canvas = document.getElementById('canvas');
+            const imagePreview = document.getElementById('imagePreview');
+            const pdfPreview = document.getElementById('pdfPreview');
+
+            const targetSizeKB = sizeSelect.value === 'custom' ? 
+                parseInt(customSize.value) || 200 : parseInt(sizeSelect.value);
+            if (targetSizeKB <= 0) {
+                status.textContent = 'Invalid size.';
+                downloadButton.disabled = true;
+                return;
+            }
+
+            status.textContent = 'Processing preview...';
+            const ctx = canvas.getContext('2d');
+            let width = currentImage.width;
+            let height = currentImage.height;
+
+            // Apply rotation
+            if (rotation) {
+                const tempCanvas = document.createElement('canvas');
+                const tempCtx = tempCanvas.getContext('2d');
+                tempCanvas.width = rotation % 180 === 0 ? width : height;
+                tempCanvas.height = rotation % 180 === 0 ? height : width;
+                tempCtx.translate(tempCanvas.width / 2, tempCanvas.height / 2);
+                tempCtx.rotate(rotation * Math.PI / 180);
+                tempCtx.drawImage(currentImage, -width / 2, -height / 2);
+                canvas.width = tempCanvas.width;
+                canvas.height = tempCanvas.height;
+                ctx.drawImage(tempCanvas, 0, 0);
+                width = canvas.width;
+                height = canvas.height;
+            } else {
+                canvas.width = width;
+                canvas.height = height;
+                ctx.drawImage(currentImage, 0, 0);
+            }
+
+            // Resize to target size
+            const originalRatio = width / height;
+            const targetSizeBytes = targetSizeKB * 1024;
+            let scale = 0.5;
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+            tempCanvas.width = width * scale;
+            tempCanvas.height = aspectRatio ? tempCanvas.width / originalRatio : height * scale;
+            tempCtx.drawImage(canvas, 0, 0, tempCanvas.width, tempCanvas.height);
+
+            let dataUrl = tempCanvas.toDataURL('image/jpeg', quality);
+            let sizeBytes = Math.round((dataUrl.length * 3) / 4);
+
+            while (sizeBytes > targetSizeBytes * 1.2 && scale > 0.1) {
+                scale *= 0.8;
+                tempCanvas.width = width * scale;
+                tempCanvas.height = aspectRatio ? tempCanvas.width / originalRatio : height * scale;
+                tempCtx.drawImage(canvas, 0, 0, tempCanvas.width, tempCanvas.height);
+                dataUrl = tempCanvas.toDataURL('image/jpeg', quality);
+                sizeBytes = Math.round((dataUrl.length * 3) / 4);
+            }
+
+            // Update preview
+            imagePreview.style.display = 'none';
+            pdfPreview.style.display = 'none';
+
+            if (outputFormat === 'jpg') {
+                imagePreview.src = dataUrl;
+                imagePreview.style.display = 'block';
+                downloadData.url = dataUrl;
+                downloadData.filename = `resized_image_${targetSizeKB}KB.jpg`;
+                downloadButton.textContent = `Download JPG (~${Math.round(sizeBytes / 1024)} KB)`;
+                downloadButton.disabled = false;
+                status.textContent = 'JPG preview updated.';
+            } else if (outputFormat === 'pdf') {
+                const pdf = new jsPDF({
+                    orientation: tempCanvas.width > tempCanvas.height ? 'landscape' : 'portrait',
+                    unit: 'px',
+                    format: [tempCanvas.width, tempCanvas.height]
+                });
+                pdf.addImage(dataUrl, 'JPEG', 0, 0, tempCanvas.width, tempCanvas.height);
+                const pdfDataUrl = pdf.output('datauristring');
+                const pdfSizeKB = Math.round((pdfDataUrl.length * 3) / 4 / 1024);
+
+                pdfjsLib.getDocument(pdfDataUrl).promise.then(pdfDoc => {
+                    pdfDoc.getPage(1).then(page => {
+                        const viewport = page.getViewport({ scale: 1 });
+                        pdfPreview.width = viewport.width;
+                        pdfPreview.height = viewport.height;
+                        const pdfCtx = pdfPreview.getContext('2d');
+                        page.render({ canvasContext: pdfCtx, viewport: viewport }).promise.then(() => {
+                            pdfPreview.style.display = 'block';
+                            status.textContent = 'PDF preview updated.';
+                        });
+                    }).catch(err => {
+                        status.textContent = 'Error rendering PDF: ' + err.message;
+                    });
+                }).catch(err => {
+                    status.textContent = 'Error loading PDF: ' + err.message;
+                });
+
+                downloadData.url = pdfDataUrl;
+                downloadData.filename = `resized_image_${targetSizeKB}KB.pdf`;
+                downloadButton.textContent = `Download PDF (~${pdfSizeKB} KB)`;
+                downloadButton.disabled = false;
+            }
+        }
+
+        function downloadResult() {
+            if (!downloadData.url) return;
+            const link = document.createElement('a');
+            link.href = downloadData.url;
+            link.download = downloadData.filename;
+            link.click();
+        }
+
+        function resetForm() {
+            document.getElementById('imageInput').value = '';
+            document.getElementById('sizeSelect').value = '200';
+            document.getElementById('customSize').style.display = 'none';
+            document.getElementById('customSize').value = '';
+            document.getElementById('aspectRatio').checked = true;
+            document.getElementById('qualitySlider').value = 90;
+            document.getElementById('qualityValue').textContent = '90';
+            document.getElementById('jpgOutput').checked = true;
+            document.getElementById('rotation').value = '0';
+            document.getElementById('imagePreview').style.display = 'none';
+            document.getElementById('pdfPreview').style.display = 'none';
+            document.getElementById('downloadButton').disabled = true;
+            document.getElementById('downloadButton').textContent = 'Download';
+            document.getElementById('status').textContent = '';
+            currentImage = null;
+            downloadData = { url: null, filename: null };
+        }
+    </script>
+</body>
+</html>
